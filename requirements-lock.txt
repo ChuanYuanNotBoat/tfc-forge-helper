@@ -1,0 +1,13 @@
+# Environment used for MVP verification (Python 3.12 / Windows x64).
+colorama==0.4.6
+iniconfig==2.3.1
+mss==10.2.0
+numpy==2.5.4
+opencv-python-headless==4.14.0.94
+packaging==26.3
+pillow==12.3.0
+pluggy==1.7.0
+Pygments==2.21.0
+pytest==9.1.1
+ruff==0.17.2
+psutil==7.2.2

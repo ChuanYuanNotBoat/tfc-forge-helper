@@ -1,0 +1,88 @@
+{
+  "name": "TFC 1.21.1",
+  "gui_width": 176,
+  "gui_height": 207,
+  "track_x": 11,
+  "current_y": 104,
+  "target_y": 98,
+  "rule_x": 59,
+  "rule_y": 13,
+  "rule_spacing": 19,
+  "history_x": 61,
+  "history_y": 34,
+  "anchor": [
+    0,
+    124,
+    176,
+    79
+  ],
+  "scales": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "region": null,
+  "threshold": 0.94,
+  "margin": 0.004,
+  "resource": "assets/tfc/textures/gui/anvil.png",
+  "buttons": [
+    [
+      53,
+      56
+    ],
+    [
+      71,
+      56
+    ],
+    [
+      53,
+      74
+    ],
+    [
+      71,
+      74
+    ],
+    [
+      89,
+      56
+    ],
+    [
+      107,
+      56
+    ],
+    [
+      89,
+      74
+    ],
+    [
+      107,
+      74
+    ]
+  ],
+  "input_slot": [
+    22,
+    76
+  ],
+  "inventory": [
+    8,
+    125
+  ],
+  "hotbar": [
+    8,
+    183
+  ],
+  "slot_spacing": 18,
+  "plan_icon": [
+    138,
+    57
+  ],
+  "cursor_park": [
+    145,
+    20
+  ]
+}
