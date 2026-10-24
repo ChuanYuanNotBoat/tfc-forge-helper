@@ -1,19 +1,20 @@
-# TFC 锻造助手 · 批量版 v0.2.1
+# TFC 锻造助手 · 批量版 v0.2.2
 
 TerraFirmaCraft 1.21.1 的 Windows 外部辅助工具：自动定位实例、读取屏幕和砧 GUI，计算最短方案，并支持自动补料、逐件锻造和收回成品。系统进程信息用于定位目录，锻造状态从画面识别。
 
 ## 启动
 
-**普通用户：** 从 [Releases](https://github.com/ChuanYuanNotBoat/tfc-forge-helper/releases/latest) 下载 `tfc-forge-helper-0.2.1-windows-x64.zip`，完整解压后双击 `TFC-Forge-Helper.exe`。支持 Windows x64，无需安装 Python。发布附件中的 `SHA256SUMS.txt` 可用于核对下载完整性。
+**普通用户：** 从 [Releases](https://github.com/ChuanYuanNotBoat/tfc-forge-helper/releases/latest) 下载 `tfc-forge-helper-0.2.2-windows-x64.zip`，完整解压后双击 `TFC-Forge-Helper.exe`。支持 Windows x64，无需安装 Python。发布附件中的 `SHA256SUMS.txt` 可用于核对下载完整性。
 
 **从源码运行：** 安装 Python 3.11+（含 Tk），双击 `start.cmd`。首次启动会建立本地虚拟环境并下载依赖。
 
 EXE 版设置保存在 `%LOCALAPPDATA%\TFCForgeHelper\settings.json`，校准默认保存到同目录下的 `profiles` 文件夹；源码版沿用项目内的 `work/settings.json`。构建与发布步骤见 [docs/releasing.md](docs/releasing.md)。
 
-更新后请先关闭旧版助手窗口，再双击 `start.cmd`，窗口标题应包含“批量版 v0.2.1”。工具默认开启连续识别，游戏已运行时自动从 Java 进程的 `--gameDir` / `-Duser.dir` 定位实例；启动器隐藏这些参数时，回退到进程工作目录。验证 `options.txt` 与 TFC JAR 后读取当前资源包，每 5 秒重新检查实例和资源配置。常见 Minecraft / Prism / MultiMC 目录作为后备。
+更新后请先关闭旧版助手窗口，再运行新版 EXE（源码版双击 `start.cmd`），窗口标题应包含“批量版 v0.2.2”。工具默认开启连续识别，游戏已运行时自动从 Java 进程的 `--gameDir` / `-Duser.dir` 定位实例；启动器隐藏这些参数时，回退到进程工作目录。验证 `options.txt` 与 TFC JAR 后读取当前资源包，每 5 秒重新检查实例和资源配置。常见 Minecraft / Prism / MultiMC 目录作为后备。
 
 - 按 **F8** 或点击“识别屏幕”读取当前状态。
-- “连续识别”默认开启，每轮完成约 1 秒后再次识别；界面变化会重新求解。
+- “连续识别”默认开启，每轮完成约 1 秒后再次识别。只有可靠识别到当前位置、目标、规则或最近历史发生变化时，才更新方案和小窗；匹配度浮动、窗口位置或缩放变化不会反复重绘同一方案。
+- 鼠标指针、提示框或临时遮挡导致某帧无法识别时，保留上一次有效方案，直到下一次有效状态更新。后台识别不反复显示加载文字或低匹配度错误；暂停连续识别也保留当前显示。
 - “小窗提示”显示下一步和完整方案，可以拖到砧 GUI 之外。
 - 默认跟随游戏进程的可见窗口截图，支持游戏在其他显示器上；也可选择主屏或全部屏幕。
 - 自动推断 GUI 位置和 1–8 倍整数缩放，移动窗口或改变 GUI scale 后无需重新设置。
@@ -95,7 +96,7 @@ v0.2.1 修复游戏窗口部分移出屏幕时，清除提示框的鼠标停放�
 
 `profiles/default.json` 列出了布局字段。重新排列控件的魔改界面可修改进度条、规则、历史和定位锚点坐标。仍需提供可解析的 atlas；MVP 不支持任意重画控件的自动推断或逐图标标注训练。
 
-识别采用 atlas 动态模板、几何位置及多候选匹配；不使用 OCR。读取 current / target、规则动作及位置条件、最近三步。若窗口遮挡、图标相似、未选配方或匹配度不足，会清空旧方案并说明原因。显示的“匹配度”是图像相似分数，不是统计校准后的正确概率。
+识别采用 atlas 动态模板、几何位置及多候选匹配；不使用 OCR。读取 current / target、规则动作及位置条件、最近三步。连续识别中，窗口遮挡、图标相似、未选配方或匹配度不足的帧不会覆盖已有显示；保留的方案仅代表上一次成功识别的状态。F8 / 按钮手动识别失败仍清空旧方案并说明原因；修改输入、切换实例或资源时也会清除旧方案。自动打铁独立重新读取并校验屏幕，不会用保留的显示方案发送点击。显示的“匹配度”是图像相似分数，不是统计校准后的正确概率。
 
 当前自动识别支持默认指针模式。服务器将 `anvilAcceptableWorkRange` 设置为 2 或以上时会绘制范围括号，MVP 暂需手工输入 target 和容差。独立 sprite atlas、动画 GUI、着色器改色、控制布局的其他模组、非整数缩放与未知内置包可能需要扩展适配。独占全屏截图不可用时，可使用窗口化/无边框模式。
 

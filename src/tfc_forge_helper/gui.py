@@ -21,6 +21,7 @@ from .model import CATEGORIES, ORDER_LABELS, Rule, parse_history
 from .paths import data_directory, profiles_directory
 from .profile import Profile
 from .solver import solve
+from .vision import DetectionError
 
 SETTINGS = data_directory() / "settings.json"
 CAT_LABELS = dict(zip(CATEGORIES, ("击打", "拉伸", "冲孔", "弯曲", "镦锻", "收缩")))
@@ -39,6 +40,7 @@ class App:
         self.last_auto = 0
         self.last_refresh = 0
         self.last_solution = None
+        self.last_capture_key = None
         self.last_source = ""
         self.source_revision = 0
         self.overlay = None
@@ -237,6 +239,7 @@ class App:
 
     def _clear(self, text):
         self.last_solution = None
+        self.last_capture_key = None
         self.next_step.set("等待方案")
         self.summary.set(text)
         self.overlay_text.set(text)
@@ -249,6 +252,8 @@ class App:
             return
         self.future_kind, self.future_generation = kind, self.generation
         self.future = self.pool.submit(operation)
+        if kind == "auto_capture":
+            return
         self.status.set({"manual": "正在搜索最少操作…", "resources": "正在自动检测实例与资源…",
                          "capture": "正在识别砧界面…", "calibrate": "正在获取校准截图…",
                          "forge": "自动打铁准备中，请切回游戏；F9 停止"}.get(kind, "正在处理…"))
@@ -307,7 +312,7 @@ class App:
         except ValueError as exc:
             self._error(exc)
 
-    def capture(self, path=None):
+    def capture(self, path=None, *, automatic=False):
         try:
             config, monitor, tolerance = self.config(), int(self.monitor.get()), int(self.tolerance.get())
         except ValueError as exc:
@@ -317,7 +322,7 @@ class App:
             self.engine.refresh(config)
             image = Image.open(path).convert("RGB") if path else screenshot(monitor, self.engine.pid)
             return self.engine.analyze(image, config, tolerance)
-        self._submit("capture", operation)
+        self._submit("auto_capture" if automatic else "capture", operation)
 
     def open_image(self):
         path = filedialog.askopenfilename(title="选择砧界面截图", filetypes=[("图片", "*.png *.jpg *.jpeg *.bmp")])
@@ -331,8 +336,31 @@ class App:
     def _live_changed(self):
         if not self.live.get():
             self.generation += 1
-            self._clear("连续识别已停止")
+            self.status.set("连续识别已暂停，保留当前显示")
         self.last_auto = 0
+
+    def _accept_capture(self, result, *, automatic=False):
+        obs = result.observation
+        key = (self.engine.revision, obs.current, obs.target, obs.rules,
+               tuple(a.category for a in obs.history))
+        if automatic and self.last_source == "capture" and key == self.last_capture_key:
+            return
+        self.updating = True
+        try:
+            self.current.set(str(obs.current))
+            self.target.set(str(obs.target))
+            self.history.set(",".join(a.category for a in obs.history))
+            for i, (a, b) in enumerate(self.rule_vars):
+                a.set(CAT_LABELS[obs.rules[i].category] if i < len(obs.rules) else "无")
+                if i < len(obs.rules):
+                    b.set(ORDER_LABELS[obs.rules[i].order])
+        finally:
+            self.updating = False
+        self.last_source = "capture"
+        self.source_revision = self.engine.revision
+        self._render(result.solution, f"匹配度 {obs.confidence:.1%} · GUI ×{obs.scale:g} · 位置 {obs.region[:2]}")
+        self._resource_info(result.assets)
+        self.last_capture_key = key
 
     def _poll(self):
         if self.closed:
@@ -357,23 +385,8 @@ class App:
                     if kind == "manual":
                         self.last_source = "manual"
                         self._render(result, "手工输入 · 最少剩余步数")
-                    elif kind == "capture":
-                        obs = result.observation
-                        self.updating = True
-                        try:
-                            self.current.set(str(obs.current))
-                            self.target.set(str(obs.target))
-                            self.history.set(",".join(a.category for a in obs.history))
-                            for i, (a, b) in enumerate(self.rule_vars):
-                                a.set(CAT_LABELS[obs.rules[i].category] if i < len(obs.rules) else "无")
-                                if i < len(obs.rules):
-                                    b.set(ORDER_LABELS[obs.rules[i].order])
-                        finally:
-                            self.updating = False
-                        self.last_source = "capture"
-                        self.source_revision = self.engine.revision
-                        self._render(result.solution, f"匹配度 {obs.confidence:.1%} · GUI ×{obs.scale:g} · 位置 {obs.region[:2]}")
-                        self._resource_info(result.assets)
+                    elif kind in ("capture", "auto_capture"):
+                        self._accept_capture(result, automatic=kind == "auto_capture")
                     elif kind == "resources":
                         if self.last_source == "capture" and self.source_revision != self.engine.revision:
                             self._clear("游戏实例或资源已变化，请重新识别")
@@ -388,13 +401,16 @@ class App:
                         self.next_step.set(f"已加工 {completed} 件" if completed is not None else
                                            ("执行完成" if result.verified else "已停止，请核对成品"))
                         self.status.set(f"{result.message} · 本次点击 {result.clicks} 次")
-            except Exception as exc:  # noqa: BLE001 - worker boundary; clear stale plan and show failure
-                # A failed or obsolete frame must never leave an actionable old plan.
+            except Exception as exc:  # noqa: BLE001 - worker boundary; report failures on the UI thread
+                # Passive display retention never supplies input to automatic forging.
                 if generation == self.generation:
                     if kind == "forge":
                         self.allow_forging.set(False)
                     self._error(exc)
             self.last_refresh = time.monotonic()
+            if kind == "auto_capture":
+                # Leave a full interval after recognition, even when it takes over a second.
+                self.last_auto = self.last_refresh
         if self.future is None:
             now = time.monotonic()
             if self.pending_forging:
@@ -402,7 +418,7 @@ class App:
                 self.start_forging()
             elif self.live.get() and now - self.last_auto > 1.0:
                 self.last_auto = now
-                self.capture()
+                self.capture(automatic=True)
             elif not self.live.get() and now - self.last_refresh > 5:
                 self.last_refresh = now
                 self.resources(force=False)
@@ -441,6 +457,13 @@ class App:
             self.bar.create_text(x, 43, text=f"{label} {value}", fill=color, font=("Microsoft YaHei UI", 9))
 
     def _error(self, exc):
+        if getattr(self, "future_kind", "") == "auto_capture" and isinstance(exc, DetectionError):
+            if self.last_source == "capture" and self.source_revision != self.engine.revision:
+                text = "游戏实例或资源已变化，请重新识别"
+                self._clear(text)
+                self.status.set(text)
+            # Ignore incomplete/occluded frames until a valid forging state arrives.
+            return
         if getattr(self, "future_kind", "") != "resources" or getattr(self, "last_source", "") == "capture":
             self._clear(str(exc))
         self.status.set(str(exc))
