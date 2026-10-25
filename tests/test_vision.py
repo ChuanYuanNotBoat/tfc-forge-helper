@@ -55,6 +55,15 @@ def test_manual_calibration_and_profile_roundtrip(atlas, tmp_path):
     assert result.current == 83
 
 
+def test_reused_detector_revalidates_location_when_gui_moves(atlas):
+    detector = Detector(atlas)
+    first = detector.detect(render_frame(atlas, origin=(103, 57)))
+    moved = detector.detect(render_frame(atlas, origin=(217, 91), current=85, target=110))
+    assert first.region[:2] == (103, 57)
+    assert moved.region[:2] == (217, 91)
+    assert (moved.current, moved.target) == (85, 110)
+
+
 @pytest.mark.parametrize("scale", [1, 2, 3])
 def test_real_default_and_user_pack(reference_atlas, scale):
     image = render_frame(reference_atlas, scale=scale, origin=(101, 55), history=("bend", "draw"))

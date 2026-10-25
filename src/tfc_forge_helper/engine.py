@@ -46,10 +46,11 @@ class Engine:
     def candidates(self):
         return self._candidates
 
-    def refresh(self, config: Config, force: bool = False) -> tuple[ResolvedAtlas, Profile]:
+    def refresh(self, config: Config, force: bool = False, *,
+                discover_process: bool = True) -> tuple[ResolvedAtlas, Profile]:
         instance = Path(config.instance) if config.instance else None
         if config.auto_instance:
-            if force or time.monotonic() - self._last_discovery >= 5:
+            if discover_process and (force or time.monotonic() - self._last_discovery >= 5):
                 candidates, self._discovery_notices = discover()
                 self._candidates = []
                 for candidate in candidates:
@@ -64,7 +65,7 @@ class Engine:
             if len(eligible) > 1:
                 raise AssetError("发现多个 TFC 实例，请在资源设置中选择一个并关闭自动选择")
             instance = eligible[0].path if eligible else None
-        elif instance is not None and (force or time.monotonic() - self._last_discovery >= 5):
+        elif discover_process and instance is not None and (force or time.monotonic() - self._last_discovery >= 5):
             # An explicitly selected instance still needs its actual game PID
             # for window-following screenshots and opt-in automatic input.
             self._candidates, self._discovery_notices = discover()
@@ -90,6 +91,13 @@ class Engine:
             self._atlas, self._detector, self._key = atlas, detector, key
             self.revision += 1
         return self._atlas, self._detector.profile
+
+    def refresh_automation(self, config: Config) -> tuple[ResolvedAtlas, Profile]:
+        # A running sequence stays attached to its initial process. Native input
+        # validates that PID/window on every click; resource signatures are still
+        # checked here. Expensive launcher/process discovery resumes after the run.
+        discover_process = self._key is None or config != self._key[0]
+        return self.refresh(config, discover_process=discover_process)
 
     def analyze(self, image: Image.Image, config: Config, tolerance: int = 0) -> Analysis:
         atlas, _ = self.refresh(config)

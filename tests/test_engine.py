@@ -65,3 +65,44 @@ def test_profile_reload_and_folder_overlay_signature(atlas, tmp_path):
     replace(Profile(), name="changed").save(profile)
     engine.refresh(config)
     assert engine.revision > before
+
+
+def test_automation_defers_process_scan_but_still_reloads_resource_changes(atlas, tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    instance = tmp_path / "instance"
+    (instance / "mods").mkdir(parents=True)
+    (instance / "resourcepacks").mkdir()
+    write_atlas(instance / "mods" / "TerraFirmaCraft-1.21.1.jar", atlas)
+    options = instance / "options.txt"
+    options.write_text('resourcePacks:["vanilla"]', encoding="utf-8")
+    discovery = Mock(return_value=([Instance(instance, "test process", 123)], []))
+    monkeypatch.setattr("tfc_forge_helper.engine.discover", discovery)
+    clock = [0.0]
+    monkeypatch.setattr("tfc_forge_helper.engine.time.monotonic", lambda: clock[0])
+    engine, config = Engine(), Config()
+    engine.refresh(config)
+    revision = engine.revision
+    clock[0] = 20.0
+    engine.refresh_automation(config)
+    assert discovery.call_count == 1
+    assert engine.pid == 123 and engine.revision == revision
+    override = instance / "resourcepacks" / "override.zip"
+    write_atlas(override, atlas)
+    options.write_text('resourcePacks:["file/override.zip"]', encoding="utf-8")
+    resolved, _ = engine.refresh_automation(config)
+    assert resolved.source == str(override)
+    assert engine.revision > revision and discovery.call_count == 1
+    engine.refresh(config)  # Normal idle monitoring resumes discovery.
+    assert discovery.call_count == 2
+
+
+def test_cold_automation_refresh_still_discovers_running_instance(atlas, tmp_path, monkeypatch):
+    instance = tmp_path / "instance"
+    (instance / "mods").mkdir(parents=True)
+    write_atlas(instance / "mods" / "TerraFirmaCraft-1.21.1.jar", atlas)
+    (instance / "options.txt").write_text('resourcePacks:[]', encoding="utf-8")
+    monkeypatch.setattr("tfc_forge_helper.engine.discover", lambda: ([Instance(instance, "test process", 123)], []))
+    engine = Engine()
+    engine.refresh_automation(Config())
+    assert engine.pid == 123 and engine.instance == str(instance)

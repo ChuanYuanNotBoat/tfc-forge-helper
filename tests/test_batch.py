@@ -243,3 +243,18 @@ def test_delayed_pickup_is_confirmed_before_placement_without_retry(atlas):
     result = execute(game)
     assert result.verified and result.completed == 2
     assert len(game.calls) == 6  # Two forge, two collect, pickup and placement; no retries.
+
+
+def test_confirmed_feed_frame_is_reused_for_next_piece_without_an_extra_capture(atlas):
+    game = InventoryGame(atlas, supplies=3)
+    original = game.frame
+    confirmed_at = []
+    def no_duplicate_feed_capture(pid):
+        if game.calls and game.input == "raw" and game.cursor is None:
+            assert len(game.calls) not in confirmed_at, "No extra frame between confirmed feeding and forging"
+            confirmed_at.append(len(game.calls))
+        return original(pid)
+    game.frame = no_duplicate_feed_capture
+    result = execute(game)
+    assert result.verified and result.completed == 4
+    assert len(confirmed_at) == 3

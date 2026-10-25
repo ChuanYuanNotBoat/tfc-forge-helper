@@ -102,13 +102,15 @@ class BatchForge:
         pid, revision = self.engine.pid, self.engine.revision
         if pid is None:
             raise AutomationStopped("尚未定位运行中的游戏进程，无法批量打铁")
-        profile = replace(profile, threshold=max(.985, profile.threshold))
+        profile = replace(profile, threshold=max(.985, profile.threshold), margin=max(.004, profile.margin))
         detector = Detector(atlas, profile)
+        forge = AutoForge(self.engine, backend, self.timeout, self.settle, detector=detector)
+        refresh = getattr(self.engine, "refresh_automation", self.engine.refresh)
 
         def check():
             if cancel.is_set():
                 raise AutomationStopped("批量打铁已停止；若鼠标仍持有物品，请手动放回")
-            self.engine.refresh(config)
+            refresh(config)
             if self.engine.pid != pid or self.engine.revision != revision:
                 raise AutomationStopped("实例或资源已变化，批量打铁已停止")
 
@@ -186,8 +188,8 @@ class BatchForge:
                     raise AutomationStopped("加工目标已变化，已停止；请检查所选成品")
                 notify(f"批量进度 {self.completed}/{count or '全部'} · 正在锻造下一件")
                 confirmed_output = None
-                result = AutoForge(self.engine, backend, self.timeout, self.settle).run(
-                    config, cancel, notify, tolerance, countdown=0, completion_check=output_ready)
+                result = forge.run(config, cancel, notify, tolerance, countdown=0,
+                                   completion_check=output_ready, initial_frame=view.frame)
                 self.clicks += result.clicks
                 view = wait_for(lambda v: v.cursor_empty and is_output(v.crop(profile.input_slot)),
                                 "无法确认成品，已停止；不会移动未确认的物品", initial=confirmed_output)

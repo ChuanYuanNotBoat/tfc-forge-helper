@@ -175,26 +175,35 @@ class WindowsInput:
 
 
 class AutoForge:
-    def __init__(self, engine: Engine, backend=None, timeout=2.5, settle=.04):
+    def __init__(self, engine: Engine, backend=None, timeout=2.5, settle=.04, *, detector=None):
         self.engine = engine
         self.backend = backend
         self.timeout, self.settle = timeout, settle
+        self._detector = detector
+        self._detector_revision = engine.revision if detector is not None else None
 
     def run(self, config: Config, cancel: threading.Event, notify=lambda value: None,
-            tolerance: int = 0, countdown: int = 3, completion_check=None) -> RunResult:
+            tolerance: int = 0, countdown: int = 3, completion_check=None, initial_frame=None) -> RunResult:
         backend = self.backend or WindowsInput()
+        refresh = getattr(self.engine, "refresh_automation", self.engine.refresh)
         for remaining in range(countdown, 0, -1):
             notify(f"{remaining} 秒后开始，请切回游戏砧界面；F9 停止")
             if cancel.wait(1):
                 raise AutomationStopped("自动打铁已取消")
-        atlas, profile = self.engine.refresh(config)
+        atlas, profile = refresh(config) if initial_frame is not None else self.engine.refresh(config)
         pid, revision = self.engine.pid, self.engine.revision
         if pid is None:
             raise AutomationStopped("未能从进程定位到当前实例，不能自动点击；请先启动游戏并完成实例检测")
         # Automation uses stricter matching than passive assistance.
         profile = replace(profile, threshold=max(.985, profile.threshold), margin=max(.004, profile.margin))
-        detector = Detector(atlas, profile)
-        frame = backend.frame(pid)
+        if (self._detector is None or self._detector_revision != revision or
+                self._detector.atlas is not atlas.image or self._detector.profile != profile):
+            self._detector = Detector(atlas, profile)
+            self._detector_revision = revision
+        detector = self._detector
+        frame = initial_frame if initial_frame is not None else backend.frame(pid)
+        if frame.pid != pid:
+            raise AutomationStopped("已确认画面不属于当前游戏进程，自动打铁已停止")
         observation = detector.detect(frame.image)
         solution = solve(observation.current, observation.target, observation.rules,
                          observation.history, tolerance=tolerance)
@@ -225,7 +234,7 @@ class AutoForge:
         for action in solution.actions:
             if cancel.is_set():
                 raise AutomationStopped("自动打铁已停止")
-            self.engine.refresh(config)
+            refresh(config)
             if self.engine.pid != pid or self.engine.revision != revision:
                 raise AutomationStopped("实例或资源包发生变化，自动打铁已停止")
             bx, by = profile.buttons[list(Action).index(action)]
@@ -242,7 +251,7 @@ class AutoForge:
         while time.monotonic() < deadline:
             if cancel.is_set():
                 raise AutomationStopped("自动打铁已停止")
-            self.engine.refresh(config)
+            refresh(config)
             if self.engine.pid != pid or self.engine.revision != revision:
                 raise AutomationStopped("实例或资源包发生变化，自动打铁已停止")
             after_frame = backend.frame(pid)

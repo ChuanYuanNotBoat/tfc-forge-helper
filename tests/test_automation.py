@@ -180,3 +180,13 @@ def test_cancel_between_planned_actions_stops_before_next_click(atlas):
     with pytest.raises(AutomationStopped, match="停止"):
         AutoForge(FakeEngine(atlas), game).run(Config(), stop, countdown=0)
     assert len(game.clicks) == 1
+
+
+def test_confirmed_frame_from_another_process_is_rejected_before_click(atlas):
+    from dataclasses import replace
+
+    game = FakeGame(atlas)
+    frame = replace(game.frame(123), pid=456)
+    with pytest.raises(AutomationStopped, match="进程"):
+        AutoForge(FakeEngine(atlas), game).run(Config(), threading.Event(), countdown=0, initial_frame=frame)
+    assert not game.clicks
