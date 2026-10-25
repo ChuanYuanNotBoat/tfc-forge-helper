@@ -40,6 +40,34 @@ class Detector:
         self._last_location = None
         for rule in self._rules:
             self._rule_images.append((rule, [self._rule_patch(rule, tint) for tint in ((1, .4, 0), (0, .6, .2))]))
+        # Atlas/profile pixels are immutable for this detector's lifetime. Build
+        # candidate patches once; frames still undergo the same full comparisons.
+        base = self.background.convert("RGB")
+        self._pointers = []
+        for row, uv in ((profile.current_y, (176, 0)), (profile.target_y, (181, 0))):
+            blank = base.crop((profile.track_x, row, profile.track_x + 155, row + 5)).convert("RGBA")
+            pointer = self.atlas.crop((uv[0], uv[1], uv[0] + 5, uv[1] + 5))
+            options = [(None, [np.array(blank.convert("RGB"))])]
+            for value in range(151):
+                patch = blank.copy()
+                patch.alpha_composite(pointer, (value, 0))
+                options.append((value, [np.array(patch.convert("RGB"))]))
+            self._pointers.append(options)
+        self._history = []
+        for i in range(3):
+            hx = profile.history_x + (2 - i) * profile.rule_spacing
+            bg = base.crop((hx, profile.history_y, hx + 16, profile.history_y + 16)).convert("RGBA")
+            options = [(None, [np.array(bg.convert("RGB"))[1:]])]
+            for category in CATEGORIES:
+                actions = [a for a in Action if a.category == category]
+                images = []
+                for action in actions:
+                    patch = bg.copy()
+                    patch.alpha_composite(self._icon(action))
+                    images.append(np.array(patch.convert("RGB"))[1:])
+                # Canonical hit category; identical sprites never imply strength.
+                options.append((actions[0], images))
+            self._history.append(options)
 
     def _icon(self, action: Action) -> Image.Image:
         return self.atlas.crop((action.icon_x, 224, action.icon_x + 16, 240))
@@ -66,7 +94,6 @@ class Detector:
             if x < 0 or y < 0 or x + w > screenshot.width or y + h > screenshot.height:
                 raise DetectionError("校准区域已超出截图，请重新校准或清除固定位置")
             return p.region, sx, 1.0
-        screen = np.array(screenshot.convert("RGB"))
         ax, ay, aw, ah = p.anchor
         anchor = self.background.crop((ax, ay, ax + aw, ay + ah)).convert("RGB")
         # Keep borders/grid lines; inventory item interiors and text do not participate.
@@ -97,6 +124,7 @@ class Detector:
                 score = 1 - distance(actual[mask > 0], template[mask > 0])
                 if score >= p.threshold:
                     return region, last_scale, score
+        screen = np.array(screenshot.convert("RGB"))
         for scale in p.scales:
             # Resize the screen down to logical pixels, avoiding giant masked convolutions.
             width, height = round(screenshot.width / scale), round(screenshot.height / scale)
@@ -164,16 +192,9 @@ class Detector:
         values = []
         # Compare entire rows against all possible pointer positions. A blank bar
         # must win over the marker templates when no recipe is selected.
-        for label, row, uv in (("当前位置", p.current_y, (176, 0)), ("目标位置", p.target_y, (181, 0))):
+        for index, (label, row) in enumerate((("当前位置", p.current_y), ("目标位置", p.target_y))):
             observed = np.array(gui.crop((p.track_x, row, p.track_x + 155, row + 5)))
-            blank = base.crop((p.track_x, row, p.track_x + 155, row + 5)).convert("RGBA")
-            pointer = self.atlas.crop((uv[0], uv[1], uv[0] + 5, uv[1] + 5))
-            options = [(None, [np.array(blank.convert("RGB"))])]
-            for value in range(151):
-                patch = blank.copy()
-                patch.alpha_composite(pointer, (value, 0))
-                options.append((value, [np.array(patch.convert("RGB"))]))
-            value, score = self._classify(observed, options, label)
+            value, score = self._classify(observed, self._pointers[index], label)
             if value is None:
                 raise DetectionError("未识别到配方指针；请选好锻造配方（范围括号模式暂需手工输入）")
             scores.append(score)
@@ -205,21 +226,8 @@ class Detector:
             hx = p.history_x + (2 - i) * p.rule_spacing
             box = (hx, p.history_y, hx + 16, p.history_y + 16)
             observed = np.array(gui.crop(box))
-            bg = base.crop(box).convert("RGBA")
-            options = [(None, [np.array(bg.convert("RGB"))])]
-            for category in CATEGORIES:
-                actions = [a for a in Action if a.category == category]
-                images = []
-                for action in actions:
-                    patch = bg.copy()
-                    patch.alpha_composite(self._icon(action))
-                    images.append(np.array(patch.convert("RGB")))
-                # All three vanilla hit history sprites are identical. Return
-                # one canonical category representative, never guess strength.
-                options.append((actions[0], images))
             # The first history row intersects the bottom of rule overlays.
-            options = [(key, [a[1:] for a in images]) for key, images in options]
-            action, score = self._classify(observed[1:], options, f"最近操作 {i+1}")
+            action, score = self._classify(observed[1:], self._history[i], f"最近操作 {i+1}")
             scores.append(score)
             if action is None:
                 seen_empty = True

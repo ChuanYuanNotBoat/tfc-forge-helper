@@ -184,3 +184,62 @@ def test_each_item_rereads_random_target_rules_and_current(atlas):
     result = execute(game)
     assert result.completed == 4 and game.collected == 4
     assert game.actions == [Action.PUNCH, Action.UPSET, Action.HIT_LIGHT, Action.SHRINK]
+
+
+def test_batch_recognizes_full_forging_state_once_per_item(atlas, monkeypatch):
+    from tfc_forge_helper.vision import Detector
+
+    detected = []
+    original = Detector.detect
+    def count_detection(detector, image):
+        observation = original(detector, image)
+        detected.append((observation.current, observation.target, observation.rules))
+        return observation
+    monkeypatch.setattr(Detector, "detect", count_detection)
+    game = InventoryGame(atlas, supplies=2)
+    result = execute(game)
+    assert result.verified and result.completed == 3
+    assert len(detected) == 3
+
+
+def test_ready_inventory_transfer_never_inserts_an_idle_wait(atlas):
+    game = InventoryGame(atlas, supplies=2)
+    class ImmediateFeedback(threading.Event):
+        def wait(self, timeout=None):
+            assert not (timeout and game.cursor), "Confirmed pickup/placement should continue immediately"
+            return self.is_set()
+    result = BatchForge(game, game).run(Config(), ImmediateFeedback(), count=3, countdown=0)
+    assert result.verified and result.completed == 3
+    assert game.cursor is None
+
+
+def test_confirmed_output_is_not_screenshotted_again_before_collection(atlas):
+    game = InventoryGame(atlas, supplies=2)
+    original = game.frame
+    output_reads = []
+    def count_output_reads(pid):
+        if game.input == "output":
+            output_reads.append(game.forged)
+        return original(pid)
+    game.frame = count_output_reads
+    result = execute(game)
+    assert result.verified and result.completed == 3
+    assert output_reads == [1, 2, 3]
+
+
+def test_delayed_pickup_is_confirmed_before_placement_without_retry(atlas):
+    game = InventoryGame(atlas, supplies=1)
+    original_frame, original_click = game.frame, game.click
+    pending = []
+    def delayed_click(frame, point, neutral, cancel, shift=False):
+        assert not pending, "A new click must wait until the prior transfer is visible"
+        before = original_frame(game.pid)
+        original_click(frame, point, neutral, cancel, shift=shift)
+        if game.cursor:
+            pending.append(before)
+    def delayed_frame(pid):
+        return pending.pop() if pending else original_frame(pid)
+    game.click, game.frame = delayed_click, delayed_frame
+    result = execute(game)
+    assert result.verified and result.completed == 2
+    assert len(game.calls) == 6  # Two forge, two collect, pickup and placement; no retries.

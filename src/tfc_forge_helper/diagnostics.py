@@ -23,16 +23,13 @@ def self_test(report: Path):
               "python": platform.python_version(), "architecture": platform.machine(),
               "data_directory": str(data_directory()), "ok": False}
     try:
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            photo = ImageTk.PhotoImage(Image.new("RGB", (16, 16), "white"), master=root)
-            if photo.width() != 16:
-                raise RuntimeError("Pillow/Tk image bridge failed")
-            root.update_idletasks()
-            result["tk"] = root.tk.call("info", "patchlevel")
-        finally:
-            root.destroy()
+        # Tcl(useTk=False) never creates a native window or takes focus.
+        interpreter = tk.Tcl()
+        result["tcl"] = interpreter.call("info", "patchlevel")
+        result["tk"] = tk.TkVersion
+        result["desktop_window_created"] = False
+        if Image.new("RGB", (16, 16), "white").size != (16, 16) or not callable(ImageTk.PhotoImage):
+            raise RuntimeError("Pillow/Tk modules unavailable")
         image = np.arange(64, dtype=np.uint8).reshape(8, 8)
         if cv2.resize(image, (16, 16)).shape != (16, 16):
             raise RuntimeError("OpenCV/NumPy runtime failed")

@@ -44,6 +44,8 @@ class FakeGame:
         return Frame(image, (1000, 100), pid, 999)
 
     def click(self, frame, point, neutral, cancel):
+        if self.clicks and self.behavior == "lost_focus":
+            raise AutomationStopped("游戏已失去焦点")
         centers = {a: (103 + (a.button[0] + 8) * 2, 57 + (a.button[1] + 8) * 2) for a in Action}
         action = next(a for a, center in centers.items() if center == point)
         self.clicks.append(action)
@@ -61,7 +63,7 @@ def run(atlas, backend, **kwargs):
         Config(), threading.Event(), countdown=0, **kwargs)
 
 
-def test_full_sequence_with_verified_feedback(atlas):
+def test_full_sequence_with_verified_completion(atlas):
     game = FakeGame(atlas)
     result = run(atlas, game)
     assert result.clicks == len(game.clicks) == 7
@@ -75,12 +77,13 @@ def test_real_pack_buttons_and_closed_loop(reference_atlas):
     assert result.verified and result.clicks == 7
 
 
-@pytest.mark.parametrize("behavior", ["ignored", "wrong_delta", "lost_focus", "recipe_changed", "cancel"])
-def test_failed_click_never_retried(atlas, behavior):
+@pytest.mark.parametrize("behavior,expected_clicks", [("ignored", 7), ("wrong_delta", 7),
+                                                    ("lost_focus", 1), ("recipe_changed", 7), ("cancel", 1)])
+def test_failed_sequence_never_retried(atlas, behavior, expected_clicks):
     game = FakeGame(atlas, behavior=behavior)
     with pytest.raises(AutomationStopped):
         run(atlas, game)
-    assert len(game.clicks) == 1
+    assert len(game.clicks) == expected_clicks
 
 
 def test_button_obscured_sends_no_click(atlas):
@@ -119,3 +122,61 @@ def test_already_complete_sends_no_click(atlas):
     game = FakeGame(atlas, current=102, target=102, rules=("punch_last",), history=("punch",))
     result = run(atlas, game)
     assert result.verified and result.clicks == 0
+
+
+def test_seven_actions_use_one_plan_and_only_initial_final_frames(atlas, monkeypatch):
+    from unittest.mock import Mock
+
+    from tfc_forge_helper import automation
+
+    game = FakeGame(atlas)
+    game.frame = Mock(wraps=game.frame)
+    solver = Mock(wraps=automation.solve)
+    monkeypatch.setattr(automation, "solve", solver)
+    result = run(atlas, game)
+    assert result.verified and result.clicks == 7
+    solver.assert_called_once()
+    assert game.frame.call_count == 2
+
+
+def test_all_planned_buttons_are_checked_before_first_click(atlas):
+    game = FakeGame(atlas)
+    original = game.frame
+    def obscured_final_button(pid):
+        frame = original(pid)
+        # Draw is used at the end of this plan, after several other actions.
+        ImageDraw.Draw(frame.image).rectangle((103 + 71 * 2, 57 + 74 * 2,
+                                              103 + 87 * 2 - 1, 57 + 90 * 2 - 1), fill="black")
+        return frame
+    game.frame = obscured_final_button
+    with pytest.raises(AutomationStopped, match="按钮"):
+        run(atlas, game)
+    assert not game.clicks
+
+
+def test_delayed_completion_waits_without_replaying_sequence(atlas):
+    game = FakeGame(atlas)
+    original = game.frame
+    initial = original(123)
+    calls = []
+    def delayed_frame(pid):
+        calls.append(pid)
+        if len(calls) < 4:
+            return initial
+        return original(pid)
+    game.frame = delayed_frame
+    result = run(atlas, game)
+    assert result.verified and result.clicks == len(game.clicks) == 7
+    assert len(calls) == 4
+
+
+def test_cancel_between_planned_actions_stops_before_next_click(atlas):
+    class CancelAfterFirstWait(threading.Event):
+        def wait(self, timeout=None):
+            self.set()
+            return True
+    game = FakeGame(atlas)
+    stop = CancelAfterFirstWait()
+    with pytest.raises(AutomationStopped, match="停止"):
+        AutoForge(FakeEngine(atlas), game).run(Config(), stop, countdown=0)
+    assert len(game.clicks) == 1

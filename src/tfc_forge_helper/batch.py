@@ -83,7 +83,7 @@ class InventoryView:
 
 
 class BatchForge:
-    def __init__(self, engine: Engine, backend=None, timeout=2.5, settle=.16):
+    def __init__(self, engine: Engine, backend=None, timeout=2.5, settle=.04):
         self.engine, self.backend = engine, backend
         self.timeout, self.settle = timeout, settle
         self.completed, self.clicks = 0, 0
@@ -116,15 +116,17 @@ class BatchForge:
             check()
             return InventoryView(backend.frame(pid), detector, profile)
 
-        def wait_for(predicate, message):
+        def wait_for(predicate, message, initial=None):
             deadline = time.monotonic() + self.timeout
-            if cancel.wait(self.settle):
+            if initial is not None:
                 check()
+                if predicate(initial):
+                    return initial
             while time.monotonic() < deadline:
                 view = read()
                 if predicate(view):
                     return view
-                if cancel.wait(.06):
+                if cancel.wait(.02):
                     check()
             raise AutomationStopped(message)
 
@@ -148,7 +150,6 @@ class BatchForge:
                 view = wait_for(lambda v: v.cursor_empty, "鼠标可能持有物品，请放回后重新开始")
             elif not view.cursor_empty:
                 raise AutomationStopped("鼠标可能持有物品，请放回后重新开始")
-            detector.detect(view.frame.image)
             if view.empty(profile.input_slot):
                 raise AutomationStopped("请先放入首件原料并选择一次配方，之后会自动补料和收成")
             raw = Icon.capture(view.crop(profile.input_slot), view.background(profile.input_slot))
@@ -166,26 +167,30 @@ class BatchForge:
             if not is_raw(view.crop(profile.input_slot)):
                 raise AutomationStopped("原料和成品图标过于相似，无法可靠换料；请使用单件模式")
 
+            confirmed_output = None
             def output_ready(frame):
+                nonlocal confirmed_output
                 candidate = InventoryView(frame, detector, profile)
-                return candidate.cursor_empty and is_output(candidate.crop(profile.input_slot))
+                if candidate.cursor_empty and is_output(candidate.crop(profile.input_slot)):
+                    confirmed_output = candidate
+                    return True
+                return False
 
             limit = count or 4096
             while self.completed < limit:
                 check()
-                view = read()
-                # Target, current and rule positions may be randomized per item.
-                # Validate this item's full state afresh; only the desired
-                # result icon identifies the batch's product, never old rules.
-                detector.detect(view.frame.image)
+                # AutoForge reads target, current and rules once for THIS item.
+                # Only the result icon identifies the batch's product; no plan
+                # or rule sequence is reused from a previously completed item.
                 if output.error(view.crop(profile.plan_icon)) > .065:
                     raise AutomationStopped("加工目标已变化，已停止；请检查所选成品")
                 notify(f"批量进度 {self.completed}/{count or '全部'} · 正在锻造下一件")
+                confirmed_output = None
                 result = AutoForge(self.engine, backend, self.timeout, self.settle).run(
                     config, cancel, notify, tolerance, countdown=0, completion_check=output_ready)
                 self.clicks += result.clicks
                 view = wait_for(lambda v: v.cursor_empty and is_output(v.crop(profile.input_slot)),
-                                "无法确认成品，已停止；不会移动未确认的物品")
+                                "无法确认成品，已停止；不会移动未确认的物品", initial=confirmed_output)
                 self.completed += 1
                 notify(f"已锻造 {self.completed} 件 · 自动收回成品")
                 click(view, profile.input_slot, shift=True)
@@ -220,7 +225,7 @@ class BatchForge:
                                     "剩余原料未能放回，已停止；请检查鼠标上的物品")
                 # Server-side anvil recipe memory may update after the slot change.
                 view = wait_for(lambda v: output.error(v.crop(profile.plan_icon)) < .065,
-                                "砧没有记住首件配方，请先选择一次配方再启动")
+                                "砧没有记住首件配方，请先选择一次配方再启动", initial=view)
             return BatchResult(self.completed, self.clicks, f"已完成指定的 {self.completed} 件，批量打铁结束", True)
         except (AutomationStopped, DetectionError) as exc:
             raise AutomationStopped(f"已完成 {self.completed} 件。{exc}") from exc

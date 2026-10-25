@@ -11,7 +11,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe scripts\build_release.py
 ```
 
-脚本核对版本、运行测试和静态检查，构建 wheel、源码包以及 PyInstaller 单文件桌面 EXE。随后将 EXE 复制到含中文和空格的临时目录，移除 PATH 中的 Python，在项目目录外验证 Tcl/Tk、Pillow、NumPy、OpenCV、进程/截图模块与求解器。该验证不会截图、注册热键或向游戏发送输入。
+脚本核对版本、运行测试和静态检查，构建 wheel、源码包以及 PyInstaller 单文件桌面 EXE。随后将 EXE 复制到含中文和空格的临时目录，移除 PATH 中的 Python，在项目目录外验证 Tcl 解释器、Tk/ImageTk 模块、Pillow、NumPy、OpenCV、进程/截图模块与求解器。该验证不创建桌面窗口、不截图、不注册热键、不向游戏发送输入。
 
 输出目录 `dist/<版本>/` 包含 Windows ZIP、wheel、源码包和 `SHA256SUMS.txt`。ZIP 包含 EXE、MIT 许可证、第三方依赖许可证、说明及示例 profile；不包含本机设置、截图、游戏 JAR 或材质包。未使用代码签名证书。已有同版本输出时脚本拒绝覆盖，请先移走旧输出。
 
@@ -22,10 +22,10 @@ GitHub 的 **Build Windows release** 工作流也可手动触发，产物保存�
 更新 `pyproject.toml` 和 `src/tfc_forge_helper/__init__.py` 中的版本，补充 `CHANGELOG.md`、发布说明和验证记录。运行构建后检查产物，提交并推送代码，再使用本机 Git 和 GitHub CLI 创建标签和 Release：
 
 ```powershell
-git tag -a v0.2.2 -m "Release v0.2.2"
+git tag -a v0.2.3 -m "Release v0.2.3"
 git push origin main
-git push origin v0.2.2
-gh release create v0.2.2 dist/0.2.2/* --verify-tag --title "TFC 锻造助手 v0.2.2" --notes-file docs/release-notes-v0.2.2.md
+git push origin v0.2.3
+gh release create v0.2.3 dist/0.2.3/* --verify-tag --title "TFC 锻造助手 v0.2.3" --notes-file docs/release-notes-v0.2.3.md
 ```
 
 发布前确认实机验收的范围。当前自动操作仍以模拟接口测试为依据，发布说明必须保留这一限制。
