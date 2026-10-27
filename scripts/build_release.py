@@ -60,7 +60,10 @@ def collect_notices(target):
 
 def smoke_test(executable, version):
     # Run a copy with no Python on PATH, outside the checkout, including a Unicode path.
-    with tempfile.TemporaryDirectory(prefix="tfc-release-") as directory:
+    # Windows may briefly keep the validated executable mapped (for example
+    # during scanning). Cleanup must not turn a successful runtime check into
+    # a failed release build just because that temporary copy is still locked.
+    with tempfile.TemporaryDirectory(prefix="tfc-release-", ignore_cleanup_errors=True) as directory:
         scratch = Path(directory) / "独立运行 test"
         scratch.mkdir()
         copied = scratch / executable.name

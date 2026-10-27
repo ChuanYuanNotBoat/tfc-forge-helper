@@ -1,12 +1,11 @@
 import ctypes
-import json
 import os
 import queue
 import threading
 import time
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -20,6 +19,7 @@ from .engine import Config, Engine
 from .model import CATEGORIES, ORDER_LABELS, Rule, parse_history
 from .paths import data_directory, profiles_directory
 from .profile import Profile
+from .settings import Preferences, Settings, load_settings, save_settings
 from .solver import solve
 from .vision import DetectionError
 
@@ -50,18 +50,19 @@ class App:
         self.forge_messages = queue.Queue()
         self.f9_registered = False
         self.pending_forging = False
+        self._settings_ready = False
+        self._settings_after = None
+        self._settings = load_settings(SETTINGS)
+        self._last_saved_settings = None
+        if config == Config():
+            config = self._settings.config
+        preferences = self._settings.preferences
+        self._preferred_live = preferences.live
         root.title(f"TFC 锻造助手 · 1.21.1 · 批量版 v{__version__}")
         root.geometry("1060x900")
         root.minsize(940, 840)
         root.configure(bg=BG)
         self._style()
-        if config == Config() and SETTINGS.is_file():
-            try:
-                saved = json.loads(SETTINGS.read_text(encoding="utf-8"))
-                saved["packs"] = tuple(saved.get("packs", []))
-                config = Config(**saved)
-            except (OSError, ValueError, TypeError):
-                pass
         self.instance = tk.StringVar(value=config.instance)
         self.jar = tk.StringVar(value=config.jar)
         self.packs = tk.StringVar(value=";".join(config.packs))
@@ -70,14 +71,14 @@ class App:
         self.current = tk.StringVar(value="83")
         self.target = tk.StringVar(value="108")
         self.history = tk.StringVar()
-        self.tolerance = tk.StringVar(value="0")
-        self.monitor = tk.StringVar(value="-1")
-        self.live = tk.BooleanVar(value=True)
-        self.show_overlay = tk.BooleanVar(value=False)
-        self.topmost = tk.BooleanVar(value=False)
+        self.tolerance = tk.StringVar(value=preferences.tolerance)
+        self.monitor = tk.StringVar(value=preferences.monitor)
+        self.live = tk.BooleanVar(value=preferences.live)
+        self.show_overlay = tk.BooleanVar(value=preferences.show_overlay)
+        self.topmost = tk.BooleanVar(value=preferences.topmost)
         self.allow_forging = tk.BooleanVar(value=False)
-        self.batch_mode = tk.BooleanVar(value=True)
-        self.batch_count = tk.StringVar(value="0")
+        self.batch_mode = tk.BooleanVar(value=preferences.batch_mode)
+        self.batch_count = tk.StringVar(value=preferences.batch_count)
         self.status = tk.StringVar(value="就绪 · 可直接手工求解；打开游戏后自动定位实例")
         self.resource_status = tk.StringVar(value="正在检查游戏进程和资源…")
         self.next_step = tk.StringVar(value="等待方案")
@@ -92,6 +93,14 @@ class App:
         for variables in self.rule_vars:
             for variable in variables:
                 variable.trace_add("write", self._changed)
+        for variable in (self.show_overlay, self.topmost):
+            variable.trace_add("write", self._queue_settings_save)
+        if self.topmost.get():
+            root.attributes("-topmost", True)
+        if self.show_overlay.get():
+            self._overlay_changed()
+        self._settings_ready = True
+        self._queue_settings_save()
         root.protocol("WM_DELETE_WINDOW", self.close)
         threading.Thread(target=self._hotkey_worker, daemon=True, name="forge-hotkey").start()
         root.after(100, self._poll)
@@ -236,6 +245,39 @@ class App:
             self.pending_forging = False
             self.generation += 1
             self._clear("设置已变化，请重新计算或识别")
+            self._queue_settings_save()
+
+    def _queue_settings_save(self, *_):
+        if not getattr(self, "_settings_ready", False) or self.closed:
+            return
+        if self._settings_after is not None:
+            self.root.after_cancel(self._settings_after)
+        self._settings_after = self.root.after(400, self._save_settings)
+
+    def _save_settings(self):
+        if not getattr(self, "_settings_ready", False) or self.closed:
+            return
+        if self._settings_after is not None:
+            try:
+                self.root.after_cancel(self._settings_after)
+            except tk.TclError:
+                pass  # A debounce callback may already have been removed by Tk.
+            self._settings_after = None
+        preferences = Preferences.from_dict({
+            "monitor": self.monitor.get(), "tolerance": self.tolerance.get(),
+            "batch_mode": self.batch_mode.get(), "batch_count": self.batch_count.get(),
+            "live": self._preferred_live, "show_overlay": self.show_overlay.get(),
+            "topmost": self.topmost.get(),
+        }, base=self._settings.preferences)
+        settings = Settings(self.config(), preferences)
+        if settings == self._last_saved_settings:
+            return
+        try:
+            save_settings(SETTINGS, settings)
+        except OSError as exc:
+            self.status.set(f"设置保存失败：{exc}")
+        else:
+            self._settings = self._last_saved_settings = settings
 
     def _clear(self, text):
         self.last_solution = None
@@ -334,6 +376,8 @@ class App:
         self._submit("resources", lambda: self.engine.refresh(config, force=force))
 
     def _live_changed(self):
+        self._preferred_live = self.live.get()
+        self._queue_settings_save()
         if not self.live.get():
             self.generation += 1
             self.status.set("连续识别已暂停，保留当前显示")
@@ -435,8 +479,6 @@ class App:
         if atlas.warnings:
             text += "\n" + "；".join(atlas.warnings)
         self.resource_status.set(text)
-        SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-        SETTINGS.write_text(json.dumps(asdict(self.config()), ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _render(self, solution, detail):
         self.last_solution = solution
@@ -587,9 +629,10 @@ class App:
                 user.UnregisterHotKey(None, 3)
 
     def close(self):
-        self.closed = True
         self.hotkey_stop.set()
         self.forge_stop.set()
+        self._save_settings()
+        self.closed = True
         self.pool.shutdown(wait=False, cancel_futures=True)
         self.root.destroy()
 
