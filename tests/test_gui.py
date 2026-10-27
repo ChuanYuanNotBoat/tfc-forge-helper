@@ -218,3 +218,124 @@ def test_forging_failure_does_not_keep_passive_plan(app, analysis):
     assert not app.allow_forging.get()
     assert app.last_solution is None
     assert app.status.get() == "自动执行中识别失败"
+
+
+def prepare_start(app, *, emergency_stop_available=True):
+    from tfc_forge_helper.engine import Config
+
+    app.f9_registered = emergency_stop_available
+    app.config = Mock(return_value=Config())
+    app.tolerance = Mock(get=Mock(return_value="0"))
+    app.batch_mode = Mock(get=Mock(return_value=True))
+    app.batch_count = Mock(get=Mock(return_value="0"))
+    app.pool = Mock()
+    app.pool.submit.return_value = Future()
+    app.resources = Mock()
+
+
+def test_start_hotkey_uses_existing_start_path_without_duplicate_runs_or_focus_changes(app):
+    prepare_start(app)
+    app.hotkeys.put("start_forging")
+    app.hotkeys.put("start_forging")
+    app._poll()
+    assert app.future_kind == "forge" and app.allow_forging.get()
+    app.pool.submit.assert_called_once()
+    assert not app.live.get() and not app.pending_forging
+    assert "3 秒" in app.summary.get()
+    assert all(call[0] == "after" for call in app.root.mock_calls)
+
+
+def test_start_hotkey_waits_for_recognition_and_starts_once(app, analysis):
+    prepare_start(app)
+    reading = Future()
+    app.future, app.future_kind, app.future_generation = reading, "auto_capture", app.generation
+    app.hotkeys.put("start_forging")
+    app._poll()
+    assert app.pending_forging
+    app.pool.submit.assert_not_called()
+    reading.set_result(analysis)
+    app._poll()
+    assert app.future_kind == "forge" and not app.pending_forging
+    app.pool.submit.assert_called_once()
+
+
+def test_stop_hotkey_cancels_start_queued_behind_recognition(app, analysis):
+    prepare_start(app)
+    reading = Future()
+    app.future, app.future_kind, app.future_generation = reading, "auto_capture", app.generation
+    app.hotkeys.put("start_forging")
+    app._poll()
+    assert app.pending_forging
+    app.hotkeys.put("stop_forging")
+    app._poll()
+    assert app.forge_stop.is_set() and not app.pending_forging
+    reading.set_result(analysis)
+    app._poll()
+    app.pool.submit.assert_not_called()
+    assert not app.allow_forging.get()
+
+
+def test_start_hotkey_cannot_bypass_missing_emergency_stop(app):
+    prepare_start(app, emergency_stop_available=False)
+    app.hotkeys.put("start_forging")
+    app._poll()
+    assert "F9" in app.status.get()
+    app.pool.submit.assert_not_called()
+
+
+@pytest.fixture
+def hotkey_backend(app, monkeypatch):
+    import ctypes
+    import os
+
+    if os.name != "nt":
+        pytest.skip("Windows global hotkey adapter")
+    from ctypes import wintypes
+
+    state = SimpleNamespace(messages=[], failures=set(), registered=[], unregistered=[])
+    def register(hwnd, identifier, modifiers, key):
+        state.registered.append((identifier, modifiers, key))
+        return identifier not in state.failures
+    def unregister(hwnd, identifier):
+        state.unregistered.append(identifier)
+        return True
+    def peek(pointer, *_):
+        if not state.messages:
+            return False
+        item = state.messages.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        message = ctypes.cast(pointer, ctypes.POINTER(wintypes.MSG)).contents
+        message.message, message.wParam = 0x0312, item
+        return True
+    user = SimpleNamespace(RegisterHotKey=register, UnregisterHotKey=unregister, PeekMessageW=peek)
+    monkeypatch.setattr("tfc_forge_helper.gui.ctypes.WinDLL", lambda *_args, **_kwargs: user)
+    app.hotkey_stop = Mock(wait=Mock(side_effect=[False, True]))
+    return state
+
+
+def test_native_hotkeys_register_nonrepeating_start_and_release_all_keys(app, hotkey_backend):
+    hotkey_backend.messages[:] = [3, 1, 2]
+    app._hotkey_worker()
+    assert (3, 0x4000, 0x76) in hotkey_backend.registered  # F7, MOD_NOREPEAT.
+    assert [app.hotkeys.get_nowait() for _ in range(3)] == ["start_forging", "capture", "stop_forging"]
+    assert app.forge_stop.is_set()  # Emergency stop does not wait for the UI poll.
+    assert hotkey_backend.unregistered == [1, 2, 3]
+
+
+def test_start_key_conflict_is_reported_without_disabling_other_keys(app, hotkey_backend):
+    hotkey_backend.failures.add(3)
+    hotkey_backend.messages[:] = [3, 1, 2]
+    app._hotkey_worker()
+    events = [app.hotkeys.get_nowait() for _ in range(app.hotkeys.qsize())]
+    assert "F7" in events[0]
+    assert events[1:] == ["capture", "stop_forging"]
+    assert app.f9_registered
+    assert hotkey_backend.unregistered == [1, 2]
+
+
+def test_native_hotkey_failure_still_unregisters_start(app, hotkey_backend):
+    hotkey_backend.messages.append(RuntimeError("message failure"))
+    with pytest.raises(RuntimeError, match="message failure"):
+        app._hotkey_worker()
+    assert hotkey_backend.unregistered == [1, 2, 3]

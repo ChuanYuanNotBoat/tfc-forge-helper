@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tfc-forge-helper"
-version = "0.2.4"
+version = "0.2.5"
 description = "External TerraFirmaCraft 1.21.1 forging assistant with opt-in verified automation"
 readme = "README.md"
 license = "MIT"

@@ -22,10 +22,10 @@ GitHub 的 **Build Windows release** 工作流也可手动触发，产物保存�
 更新 `pyproject.toml` 和 `src/tfc_forge_helper/__init__.py` 中的版本，补充 `CHANGELOG.md`、发布说明和验证记录。运行构建后检查产物，提交并推送代码，再使用本机 Git 和 GitHub CLI 创建标签和 Release：
 
 ```powershell
-git tag -a v0.2.4 -m "Release v0.2.4"
+git tag -a v0.2.5 -m "Release v0.2.5"
 git push origin main
-git push origin v0.2.4
-gh release create v0.2.4 dist/0.2.4/* --verify-tag --title "TFC 锻造助手 v0.2.4" --notes-file docs/release-notes-v0.2.4.md
+git push origin v0.2.5
+gh release create v0.2.5 dist/0.2.5/* --verify-tag --title "TFC 锻造助手 v0.2.5" --notes-file docs/release-notes-v0.2.5.md
 ```
 
 发布前确认实机验收的范围。当前自动操作仍以模拟接口测试为依据，发布说明必须保留这一限制。

@@ -142,7 +142,7 @@ class App:
                         command=lambda: self.root.attributes("-topmost", self.topmost.get())).pack(side="right")
         automation = ttk.Frame(outer)
         automation.pack(fill="x", pady=(0, 12))
-        self.start_forge_button = ttk.Button(automation, text="开始自动打铁（3 秒）", command=self.start_forging,
+        self.start_forge_button = ttk.Button(automation, text="开始自动打铁  F7（3 秒）", command=self.start_forging,
                                              state="normal")
         self.start_forge_button.pack(side="left")
         ttk.Button(automation, text="停止  F9", command=self.stop_forging).pack(side="left")
@@ -374,6 +374,10 @@ class App:
             event = self.hotkeys.get_nowait()
             if event == "capture":
                 self.capture()
+            elif event == "start_forging":
+                self.start_forging()
+            elif event == "stop_forging":
+                self.stop_forging()
             else:
                 self.status.set(event)
         if self.future and self.future.done():
@@ -391,7 +395,7 @@ class App:
                         if self.last_source == "capture" and self.source_revision != self.engine.revision:
                             self._clear("游戏实例或资源已变化，请重新识别")
                         self._resource_info(result[0])
-                        self.status.set("资源已就绪 · F8 识别屏幕，或启用连续识别")
+                        self.status.set("资源已就绪 · F7 开始自动打铁 · F8 识别 · F9 停止")
                     elif kind == "calibrate":
                         self._calibration_dialog(result)
                     elif kind == "forge":
@@ -555,24 +559,32 @@ class App:
         user.PeekMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT, wintypes.UINT]
         f8_registered = bool(user.RegisterHotKey(None, 1, 0x4000, 0x77))
         self.f9_registered = bool(user.RegisterHotKey(None, 2, 0x4000, 0x78))
+        f7_registered = bool(user.RegisterHotKey(None, 3, 0x4000, 0x76))
         if not f8_registered:
             self.hotkeys.put("F8 已被其他程序占用；请使用窗口内的识别按钮")
         if not self.f9_registered:
             self.hotkeys.put("F9 被占用，自动打铁不可启动；释放热键并重启助手后可用")
+        if not f7_registered:
+            self.hotkeys.put("F7 已被其他程序占用；请使用窗口内的开始自动打铁按钮")
         try:
             msg = wintypes.MSG()
             while not self.hotkey_stop.wait(.08):
                 while user.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
                     if msg.message == 0x0312:
-                        if msg.wParam == 2:
+                        if msg.wParam == 2 and self.f9_registered:
                             self.forge_stop.set()
-                        elif msg.wParam == 1:
+                            self.hotkeys.put("stop_forging")
+                        elif msg.wParam == 1 and f8_registered:
                             self.hotkeys.put("capture")
+                        elif msg.wParam == 3 and f7_registered:
+                            self.hotkeys.put("start_forging")
         finally:
             if f8_registered:
                 user.UnregisterHotKey(None, 1)
             if self.f9_registered:
                 user.UnregisterHotKey(None, 2)
+            if f7_registered:
+                user.UnregisterHotKey(None, 3)
 
     def close(self):
         self.closed = True
